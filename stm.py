@@ -1,32 +1,29 @@
-
-import streamlit as st
+import streamlit as st 
 import pdfplumber
 import pandas as pd
 import os
 import re
 from datetime import datetime
 
+# 📌 Clean the DataFrame (remove prefixes like "F ", "L ", "A123", etc.)
 def clean_dataframe(df):
     def clean_cell(x):
         if pd.isnull(x):
             return x
         s = str(x).replace('\n', '').strip()
-
-        # Remove leading 'F ', 'L ', 'A ' only when followed by a space or a number
         if re.match(r'^[FLA]\s+', s):
             s = re.sub(r'^[FLA]\s+', '', s)
-        elif re.match(r'^[FLA](\d+(\.\d+)?|\.\d+)$', s):  # A123, A0.00, A.50 etc.
+        elif re.match(r'^[FLA](\d+(\.\d+)?|\.\d+)$', s):
             s = re.sub(r'^[FLA]', '', s)
-
         return s
 
     df = df.applymap(clean_cell)
 
-    # Drop mostly empty columns
+    # Drop columns that are mostly empty
     threshold = 0.9
     df = df.dropna(axis=1, thresh=int((1 - threshold) * len(df)))
 
-    # Drop trailing empty columns (like N to Q if blank)
+    # Remove trailing empty columns
     last_valid_col = None
     for col in reversed(df.columns):
         if df[col].replace('', pd.NA).dropna().shape[0] > 0:
@@ -37,9 +34,10 @@ def clean_dataframe(df):
 
     return df
 
-def extract_table_from_pdf(pdf_path):
+# 📌 Extract and process data from a single PDF
+def extract_table_from_pdf(pdf_file):
     all_rows = []
-    with pdfplumber.open(pdf_path) as pdf:
+    with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
             table = page.extract_table()
             if table:
@@ -48,11 +46,9 @@ def extract_table_from_pdf(pdf_path):
     if len(all_rows) < 8:
         raise ValueError("PDF table too short")
 
-    # Main table: from row 8 onwards
     header = all_rows[7]
     df = pd.DataFrame(all_rows[8:], columns=header)
 
-    # Metadata from rows 1–7 (2nd col as key, 8th col as value)
     for row in all_rows[:7]:
         if len(row) > 7 and row[1] and row[7]:
             key = row[1].strip()
@@ -60,7 +56,6 @@ def extract_table_from_pdf(pdf_path):
             if val.lower() not in ("", "none", "0", "0.00"):
                 df[key] = val
 
-    # Extract ARN and DATE from first 6 rows
     arn = ""
     date = ""
     for row in all_rows[:6]:
@@ -76,8 +71,16 @@ def extract_table_from_pdf(pdf_path):
 
     return clean_dataframe(df)
 
+# 📌 Wrap it in a callable for Streamlit to use
+def process_pdf(uploaded_file):
+    try:
+        df = extract_table_from_pdf(uploaded_file)
+        return df, uploaded_file.name
+    except Exception as e:
+        st.error(f"❌ Error processing {uploaded_file.name}: {e}")
+        return None, uploaded_file.name
 
-# Streamlit UI
+# 📌 Streamlit UI
 st.title("📄 PDF to Excel Converter")
 
 uploaded_files = st.file_uploader("Upload one or more PDF files", accept_multiple_files=True, type="pdf")
@@ -88,15 +91,15 @@ if uploaded_files:
         df, name = process_pdf(file)
         if df is not None:
             all_data.append(df)
-            st.success(f"✅ Processed {name}")
+            st.success(f"✅ Processed: {name}")
         else:
-            st.warning(f"⚠️ Skipped {name} — Not enough rows")
+            st.warning(f"⚠️ Skipped: {name}")
 
     if all_data:
         combined_df = pd.concat(all_data, ignore_index=True)
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_name = f"combined_output_{timestamp}.xlsx"
-        combined_df.to_excel(file_name, index=False)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_filename = f"combined_output_{timestamp}.xlsx"
+        combined_df.to_excel(output_filename, index=False)
 
-        with open(file_name, 'rb') as f:
-            st.download_button("📥 Download Excel", f, file_name)
+        with open(output_filename, 'rb') as f:
+            st.download_button("📥 Download Excel File", f, output_filename)
